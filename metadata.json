@@ -1,0 +1,6 @@
+{
+  "name": "VIP Store",
+  "description": "Premium Zimbabwean fashion e-commerce marketplace optimized for low-bandwidth 3G/4G networks, complete with EcoCash/InnBucks integrations, order tracking, and a professional admin backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
