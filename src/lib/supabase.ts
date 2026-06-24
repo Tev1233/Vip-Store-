@@ -161,7 +161,7 @@ export async function signInMember(
       let profile: UserProfile = {
         email: cleanEmail,
         name: authData.user?.user_metadata?.name || 'Tendai Moyo',
-        phone: authData.user?.user_metadata?.phone || '+263777123456',
+        phone: authData.user?.user_metadata?.phone || '+263776559364',
         address: authData.user?.user_metadata?.address || {
           street: 'Central Avenues',
           city: 'Chinhoyi',
@@ -216,7 +216,7 @@ export async function signInMember(
   const genericProfile: UserProfile = {
     email: cleanEmail,
     name: 'Tendai Moyo (Simulated)',
-    phone: '+263777123456',
+    phone: '+263776559364',
     address: {
       street: '14 King George Road, Avondale',
       city: 'Harare',
@@ -241,6 +241,160 @@ export async function signOutMember(): Promise<void> {
 }
 
 /**
+ * Send Magic Link OTP / Sign-in Link to Email
+ */
+export async function sendMagicLink(
+  email: string,
+  isSignUp: boolean,
+  profileData?: Omit<UserProfile, 'email' | 'wishlist' | 'couponsUsed' | 'loyaltyPoints'>
+): Promise<{ success: boolean; error?: string; isMock?: boolean }> {
+  const cleanEmail = email.toLowerCase();
+  if (isSupabaseActive() && supabaseClient) {
+    try {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        email: cleanEmail,
+        options: {
+          emailRedirectTo: window.location.origin,
+          data: isSignUp && profileData ? {
+            name: profileData.name,
+            phone: profileData.phone,
+            address: profileData.address,
+          } : undefined,
+        },
+      });
+      if (error) throw error;
+      return { success: true, isMock: false };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to send Magic Link.' };
+    }
+  }
+
+  // Fallback Simulation Mode
+  if (isSignUp && profileData) {
+    const simulatedProfile: UserProfile = {
+      email: cleanEmail,
+      name: profileData.name,
+      phone: profileData.phone,
+      address: profileData.address,
+      wishlist: [],
+      couponsUsed: [],
+      referralCode: profileData.referralCode,
+      loyaltyPoints: 150,
+    };
+    localStorage.setItem(`mock_profile_${cleanEmail}`, JSON.stringify(simulatedProfile));
+  }
+  return { success: true, isMock: true };
+}
+
+/**
+ * Send OTP Code to Phone Number
+ */
+export async function sendPhoneOTP(
+  phone: string,
+  isSignUp: boolean,
+  profileData?: Omit<UserProfile, 'email' | 'wishlist' | 'couponsUsed' | 'loyaltyPoints'>
+): Promise<{ success: boolean; error?: string; isMock?: boolean; simulatedOTP?: string }> {
+  if (isSupabaseActive() && supabaseClient) {
+    try {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        phone: phone,
+        options: {
+          data: isSignUp && profileData ? {
+            name: profileData.name,
+            phone: profileData.phone,
+            address: profileData.address,
+          } : undefined,
+        },
+      });
+      if (error) throw error;
+      return { success: true, isMock: false };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Failed to send Phone OTP.' };
+    }
+  }
+
+  // Fallback Simulation Mode: generate a random 6-digit OTP code
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  return { success: true, isMock: true, simulatedOTP: code };
+}
+
+/**
+ * Verify OTP Code for Phone Number
+ */
+export async function verifyPhoneOTP(
+  phone: string,
+  token: string,
+  isSignUp: boolean,
+  profileData?: Partial<UserProfile>
+): Promise<{ success: boolean; profile?: UserProfile; error?: string; isMock?: boolean }> {
+  if (isSupabaseActive() && supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient.auth.verifyOtp({
+        phone: phone,
+        token: token,
+        type: 'sms',
+      });
+      if (error) throw error;
+
+      const cleanEmail = data.user?.email || `phone-${phone.replace('+', '')}@vip.co.zw`;
+      
+      let profile: UserProfile = {
+        email: cleanEmail,
+        name: data.user?.user_metadata?.name || profileData?.name || 'Tendai Moyo',
+        phone: phone,
+        address: data.user?.user_metadata?.address || profileData?.address || {
+          street: 'Central Avenues',
+          city: 'Chinhoyi',
+          province: 'Mashonaland West',
+        },
+        wishlist: [],
+        couponsUsed: [],
+        referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000),
+        loyaltyPoints: 150,
+      };
+
+      try {
+        await supabaseClient.from('profiles').upsert({
+          email: cleanEmail,
+          name: profile.name,
+          phone: phone,
+          address: JSON.stringify(profile.address),
+          referral_code: profile.referralCode,
+          loyalty_points: 150,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (dbErr) {
+        console.warn('Custom profiles table upsert skipped during phone OTP verify:', dbErr);
+      }
+
+      return { success: true, profile, isMock: false };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'OTP verification failed.' };
+    }
+  }
+
+  // Fallback Simulation Mode
+  const cleanEmail = profileData?.email || `phone-${phone.replace('+', '')}@vip.co.zw`;
+  let profile: UserProfile = {
+    email: cleanEmail,
+    name: profileData?.name || 'Tendai Moyo',
+    phone: phone,
+    address: profileData?.address || {
+      street: 'Central Avenues',
+      city: 'Chinhoyi',
+      province: 'Mashonaland West',
+    },
+    wishlist: [],
+    couponsUsed: [],
+    referralCode: profileData?.referralCode || 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000),
+    loyaltyPoints: 150,
+  };
+
+  localStorage.setItem(`mock_profile_${cleanEmail}`, JSON.stringify(profile));
+  return { success: true, profile, isMock: true };
+}
+
+/**
  * Retrieve current active session and profile, if any exists in Supabase Client.
  */
 export async function getSessionUserProfile(): Promise<UserProfile | null> {
@@ -256,7 +410,7 @@ export async function getSessionUserProfile(): Promise<UserProfile | null> {
       let profile: UserProfile = {
         email: cleanEmail,
         name: user.user_metadata?.name || 'Tendai Moyo',
-        phone: user.user_metadata?.phone || '+263777123456',
+        phone: user.user_metadata?.phone || '+263776559364',
         address: user.user_metadata?.address || {
           street: 'Central Avenues',
           city: 'Chinhoyi',

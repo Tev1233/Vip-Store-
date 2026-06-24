@@ -162,7 +162,7 @@ export default function ReviewsSection({ productId, reviews, onAddReview }: Revi
                 <ThumbsUp className="h-3 w-3 text-[#D4AF37]" /> Helpfulness Vote
               </button>
               <span>•</span>
-              <span className="text-zinc-400">Active Audit: Chinhoyi Plaza verified</span>
+              <span className="text-zinc-400">Active Audit: Grey Building, Chinhoyi verified</span>
             </div>
           </div>
         ))}

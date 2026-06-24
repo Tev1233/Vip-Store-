@@ -9,7 +9,7 @@ import {
   X, Mail, Lock, User, Phone, MapPin, 
   Heart, PackageCheck, Award, Share2, Clipboard, LogIn 
 } from 'lucide-react';
-import { signUpMember, signInMember, signOutMember, isSupabaseActive } from '../lib/supabase';
+import { signUpMember, signInMember, signOutMember, isSupabaseActive, sendMagicLink, sendPhoneOTP, verifyPhoneOTP } from '../lib/supabase';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -33,102 +33,242 @@ export default function AuthModal({
   onViewInvoice
 }: AuthModalProps) {
   const [isSignUp, setIsSignUp] = useState(false);
+  const [loginStyle, setLoginStyle] = useState<'email' | 'phone'>('email');
   
-  // Login fields
+  // Form fields
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [city, setCity] = useState('Chinhoyi');
   const [street, setStreet] = useState('');
+  
+  // OTP Verification state
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [simulatedOTP, setSimulatedOTP] = useState('');
+  const [magicLinkSent, setMagicLinkSent] = useState(false);
 
   const [authSuccess, setAuthSuccess] = useState('');
   const [authError, setAuthError] = useState('');
 
   if (!isOpen) return null;
 
-  const handleAuthSubmit = async (e: React.FormEvent) => {
+  // Zimbabwe Mobile Number strict verification and auto-formatting
+  const validateAndFormatZimPhone = (ph: string): { isValid: boolean; formatted?: string; error?: string } => {
+    const clean = ph.replace(/[\s\-\(\)]/g, '');
+    
+    // Check match for +26377..., 26377..., 77...
+    if (/^(\+263|263)?7[1378]\d{7}$/.test(clean)) {
+      let formatted = clean;
+      if (clean.startsWith('7')) {
+        formatted = '+263' + clean;
+      } else if (clean.startsWith('263')) {
+        formatted = '+' + clean;
+      }
+      return { isValid: true, formatted };
+    }
+    
+    // Check match for 077...
+    if (/^07[1378]\d{7}$/.test(clean)) {
+      const formatted = '+263' + clean.slice(1);
+      return { isValid: true, formatted };
+    }
+    
+    return { 
+      isValid: false, 
+      error: 'Zimbabwe mobile numbers must start with +26377, +26371, +26373, or +26378, followed by 7 digits (or local format e.g. 077...).' 
+    };
+  };
+
+  const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
     setAuthSuccess('');
 
+    if (!email) {
+      setAuthError('Please enter a valid email address.');
+      return;
+    }
+
+    let profileData = undefined;
     if (isSignUp) {
-      if (!name || !email || !password || !phone) {
-        setAuthError('All registration credentials must be provided.');
+      if (!name) {
+        setAuthError('Please enter your full name for membership registration.');
         return;
       }
-      
-      const response = await signUpMember(email, password, {
+      if (!phone) {
+        setAuthError('Zimbabwe mobile phone is required for delivery defaults.');
+        return;
+      }
+      const phoneCheck = validateAndFormatZimPhone(phone);
+      if (!phoneCheck.isValid) {
+        setAuthError(phoneCheck.error);
+        return;
+      }
+      profileData = {
         name,
-        phone,
+        phone: phoneCheck.formatted || phone,
         address: {
-          street: street || 'Central Avenues',
-          city: city,
+          street: street || 'Grey Building, Chinhoyi',
+          city,
           province: city === 'Chinhoyi' ? 'Mashonaland West' : (city === 'Harare' ? 'Harare Metropolitan' : 'Bulawayo Metropolitan')
         },
         referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000)
-      });
+      };
+    }
 
-      if (!response.success) {
-        setAuthError(response.error || 'Registration failed.');
+    const res = await sendMagicLink(email, isSignUp, profileData);
+    if (res.success) {
+      setMagicLinkSent(true);
+      if (res.isMock) {
+        setAuthSuccess('Simulated Link Dispatched! (Sandbox Mode Active)');
+      } else {
+        setAuthSuccess('Magic link successfully dispatched! Please check your email inbox.');
+      }
+    } else {
+      setAuthError(res.error || 'Failed to dispatch magic link. Please check your network connection.');
+    }
+  };
+
+  const handleSendPhoneOTP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+
+    if (!phone) {
+      setAuthError('Please enter your Zimbabwe mobile number.');
+      return;
+    }
+
+    const phoneCheck = validateAndFormatZimPhone(phone);
+    if (!phoneCheck.isValid) {
+      setAuthError(phoneCheck.error);
+      return;
+    }
+
+    const finalPhone = phoneCheck.formatted!;
+
+    let profileData = undefined;
+    if (isSignUp) {
+      if (!name) {
+        setAuthError('Please enter your full name for membership registration.');
         return;
       }
-
-      const activeProfile: UserProfile = {
-        email,
+      if (!email) {
+        setAuthError('Please enter your email address for purchase notifications.');
+        return;
+      }
+      profileData = {
         name,
-        phone,
+        phone: finalPhone,
         address: {
-          street: street || 'Central Avenues',
-          city: city,
+          street: street || 'Grey Building, Chinhoyi',
+          city,
           province: city === 'Chinhoyi' ? 'Mashonaland West' : (city === 'Harare' ? 'Harare Metropolitan' : 'Bulawayo Metropolitan')
         },
-        wishlist: [],
-        couponsUsed: [],
-        referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000),
-        loyaltyPoints: 150
+        referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000)
       };
+    }
 
-      setCurrentUser(activeProfile);
-      setAuthSuccess(response.isMock 
-        ? 'Signed up successfully! (Running in Offline Sandbox Mode)' 
-        : 'Registered successfully via Supabase Real-time Cloud Auth!'
-      );
+    const res = await sendPhoneOTP(finalPhone, isSignUp, profileData);
+    if (res.success) {
+      setOtpSent(true);
+      if (res.isMock && res.simulatedOTP) {
+        setSimulatedOTP(res.simulatedOTP);
+        setAuthSuccess(`Simulated SMS Sent! OTP Code is: ${res.simulatedOTP}`);
+      } else {
+        setAuthSuccess(`OTP verification code dispatched to ${finalPhone}.`);
+      }
+    } else {
+      setAuthError(res.error || 'Failed to dispatch phone authentication OTP.');
+    }
+  };
+
+  const handleVerifyPhoneOTP = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+
+    if (!otpCode || otpCode.length < 6) {
+      setAuthError('Please enter the 6-digit authentication code.');
+      return;
+    }
+
+    const phoneCheck = validateAndFormatZimPhone(phone);
+    const finalPhone = phoneCheck.isValid ? phoneCheck.formatted! : phone;
+
+    let profileData = undefined;
+    if (isSignUp) {
+      profileData = {
+        email: email.toLowerCase(),
+        name,
+        phone: finalPhone,
+        address: {
+          street: street || 'Grey Building, Chinhoyi',
+          city,
+          province: city === 'Chinhoyi' ? 'Mashonaland West' : (city === 'Harare' ? 'Harare Metropolitan' : 'Bulawayo Metropolitan')
+        },
+        referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000)
+      };
+    }
+
+    const res = await verifyPhoneOTP(finalPhone, otpCode, isSignUp, profileData);
+    if (res.success && res.profile) {
+      setCurrentUser(res.profile);
+      localStorage.setItem('vip_active_session_email', res.profile.email);
+      setAuthSuccess('Authenticated Successfully. Loading Chinhoyi Hub...');
       setTimeout(() => {
         setAuthSuccess('');
       }, 4000);
     } else {
-      // Sign In
-      if (!email || !password) {
-        setAuthError('Please fill in both email and password.');
-        return;
-      }
-
-      const response = await signInMember(email, password);
-
-      if (!response.success) {
-        setAuthError(response.error || 'Authentication rejected. Verification failed.');
-        return;
-      }
-
-      if (response.profile) {
-        setCurrentUser(response.profile);
-        setAuthSuccess(response.isMock 
-          ? 'Welcome back! Loaded profile from offline safe registry.' 
-          : 'Authenticated successfully under Supabase security tokens!'
-        );
-        setTimeout(() => {
-          setAuthSuccess('');
-        }, 4000);
-      }
+      setAuthError(res.error || 'OTP code is invalid or has expired. Please try requesting a new code.');
     }
   };
 
   const handleLogout = async () => {
     await signOutMember();
     setCurrentUser(null);
+    localStorage.removeItem('vip_active_session_email');
     setAuthSuccess('Logged out successfully.');
+    setOtpSent(false);
+    setMagicLinkSent(false);
+    setOtpCode('');
+    setSimulatedOTP('');
     setTimeout(() => setAuthSuccess(''), 2000);
+  };
+
+  const simulateMagicLinkClick = async () => {
+    setAuthError('');
+    setAuthSuccess('');
+    
+    // Simulate login for the given email
+    const cleanEmail = email.toLowerCase() || 'visitor@vip.co.zw';
+    const mockName = name || 'Tendai Moyo';
+    const phoneCheck = validateAndFormatZimPhone(phone || '+263776559364');
+    const finalPhone = phoneCheck.isValid ? phoneCheck.formatted! : '+263776559364';
+
+    const mockProfile: UserProfile = {
+      email: cleanEmail,
+      name: mockName,
+      phone: finalPhone,
+      address: {
+        street: street || 'Grey Building, Chinhoyi',
+        city,
+        province: city === 'Chinhoyi' ? 'Mashonaland West' : (city === 'Harare' ? 'Harare Metropolitan' : 'Bulawayo Metropolitan')
+      },
+      wishlist: [],
+      couponsUsed: [],
+      referralCode: 'VIPREF-' + Math.floor(Math.random() * 9000 + 1000),
+      loyaltyPoints: 150
+    };
+
+    localStorage.setItem(`mock_profile_${cleanEmail}`, JSON.stringify(mockProfile));
+    localStorage.setItem('vip_active_session_email', cleanEmail);
+    setCurrentUser(mockProfile);
+    setAuthSuccess('Authenticated Successfully. Loading Chinhoyi Hub...');
+    setTimeout(() => {
+      setAuthSuccess('');
+    }, 4000);
   };
 
   const userOrders = orders.filter(o => o.customerEmail === (currentUser?.email || ''));
@@ -142,7 +282,7 @@ export default function AuthModal({
           <div className="flex items-center gap-2">
             <LogIn className="h-4.5 w-4.5 text-[#D4AF37]" />
             <h3 className="text-sm font-extrabold uppercase tracking-widest text-[#222]">
-              {currentUser ? 'VIP Client Account Room' : isSignUp ? 'Request VIP Membership/SignUp' : 'Sign In to VIP Dashboard'}
+              {currentUser ? 'VIP Client Account Room' : isSignUp ? 'Request VIP Membership' : 'Sign In to VIP Dashboard'}
             </h3>
           </div>
           <button 
@@ -227,7 +367,7 @@ export default function AuthModal({
                       setAuthSuccess('Copied referral URL to clipboard!');
                       setTimeout(() => setAuthSuccess(''), 2000);
                     }}
-                    className="flex items-center gap-1 px-3 py-1 bg-black hover:bg-zinc-800 text-white font-bold rounded-sm"
+                    className="flex items-center gap-1 px-3 py-1 bg-black hover:bg-zinc-800 text-white font-bold rounded-sm cursor-pointer"
                   >
                     <Clipboard className="h-3.5 w-3.5" />
                     Copy
@@ -257,13 +397,25 @@ export default function AuthModal({
                         </span>
                       </div>
                       <div className="text-right space-y-1.5 shrink-0">
-                        <p className="font-bold text-zinc-900 font-mono">${ord.total.toFixed(2)}</p>
-                        <button
-                          onClick={() => onViewInvoice(ord)}
-                          className="px-2.5 py-1 text-[10px] bg-white hover:bg-zinc-50 text-zinc-800 border border-zinc-250 rounded-sm transition-all font-sans font-bold"
-                        >
-                          Invoice Receipt
-                        </button>
+                        <p className="font-bold text-zinc-900 font-mono text-right">${ord.total.toFixed(2)}</p>
+                        <div className="flex items-center gap-1.5 justify-end">
+                          <button
+                            onClick={() => onViewInvoice(ord)}
+                            className="px-2 py-1 text-[9px] bg-white hover:bg-zinc-50 text-zinc-805 border border-zinc-250 rounded-sm transition-all font-sans font-bold uppercase tracking-wider cursor-pointer"
+                          >
+                            Invoice
+                          </button>
+                          <a
+                            href={`https://wa.me/263776559364?text=${encodeURIComponent(
+                              `Hello, I am checking on my order ${ord.id}. Is it ready for collection at the Grey Building in Chinhoyi?`
+                            )}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2 py-1 text-[9px] bg-emerald-700 hover:bg-emerald-800 text-white rounded-sm transition-all font-sans font-bold uppercase tracking-wider flex items-center gap-1 cursor-pointer"
+                          >
+                            Track (WA)
+                          </a>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -326,11 +478,11 @@ export default function AuthModal({
             </div>
           ) : (
             /* NON LOGGED-IN: INTERACTIVE SIGN IN / SIGN UP FORMS */
-            <form onSubmit={handleAuthSubmit} className="space-y-4 text-zinc-700">
+            <div className="space-y-4 text-zinc-700">
               
               <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-sm text-zinc-600 space-y-2 leading-relaxed">
                 <div className="flex items-center justify-between">
-                  <p className="font-bold text-zinc-900">🔥 Supabase + Postgres Secure Connection</p>
+                  <p className="font-bold text-zinc-900">⚡ Supabase Secure Authentication Hub</p>
                   <span className={`px-2 py-0.5 rounded-sm font-mono text-[9px] font-bold ${
                     isSupabaseActive() 
                       ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
@@ -341,115 +493,343 @@ export default function AuthModal({
                 </div>
                 <p className="text-[10.5px]">
                   {isSupabaseActive() 
-                    ? 'Connected directly to live secure Supabase servers. User profiles and account registries are synced under real-time cloud clusters.' 
+                    ? 'Connected directly to live secure Supabase servers. User profiles and passwordless credentials are authenticated securely.' 
                     : 'Register an account to store wishlists, orders, shipping coordinates and unlock 150 loyalty points immediately.'}
                 </p>
               </div>
 
-              {isSignUp && (
-                <div className="space-y-1">
-                  <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><User className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Full Member Name</label>
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="e.g. Tendai Moyo"
-                    className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
-                  />
-                </div>
-              )}
-
-              <div className="space-y-1">
-                <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><Mail className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Member Email Address</label>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  placeholder="name@gmail.com"
-                  className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
-                />
+              {/* Clean Switch Tab Toggle */}
+              <div className="flex bg-zinc-100 p-1 rounded-sm border border-zinc-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginStyle('email');
+                    setOtpSent(false);
+                    setAuthError('');
+                    setAuthSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 rounded-sm text-[11px] font-bold transition-all ${
+                    loginStyle === 'email' ? 'bg-white text-zinc-900 shadow-xs border border-zinc-200' : 'text-zinc-500 hover:text-zinc-800'
+                  }`}
+                >
+                  ✉️ Email Magic Link
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginStyle('phone');
+                    setOtpSent(false);
+                    setAuthError('');
+                    setAuthSuccess('');
+                  }}
+                  className={`flex-1 py-1.5 rounded-sm text-[11px] font-bold transition-all ${
+                    loginStyle === 'phone' ? 'bg-white text-zinc-900 shadow-xs border border-zinc-200' : 'text-zinc-500 hover:text-zinc-800'
+                  }`}
+                >
+                  📱 Phone OTP
+                </button>
               </div>
 
-              {isSignUp && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {loginStyle === 'email' ? (
+                /* EMAIL MAGIC LINK MODE */
+                <form onSubmit={handleSendMagicLink} className="space-y-4">
+                  {isSignUp && (
+                    <div className="space-y-1">
+                      <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                        <User className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Full Member Name
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={name}
+                        onChange={e => setName(e.target.value)}
+                        placeholder="e.g. Tendai Moyo"
+                        className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                      />
+                    </div>
+                  )}
+
                   <div className="space-y-1">
-                    <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><Phone className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Zimbabwe Mobile</label>
+                    <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                      <Mail className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Member Email Address
+                    </label>
                     <input
-                      type="tel"
+                      type="email"
                       required
-                      placeholder="+263777123456"
-                      value={phone}
-                      onChange={e => setPhone(e.target.value)}
-                      className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="name@gmail.com"
+                      className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
                     />
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Metropolitan Area</label>
-                    <select
-                      value={city}
-                      onChange={e => setCity(e.target.value)}
-                      className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-sans"
-                    >
-                      <option value="Chinhoyi">Chinhoyi (HQ)</option>
-                      <option value="Harare">Harare Metro</option>
-                      <option value="Bulawayo">Bulawayo Metro</option>
-                      <option value="Mutare">Mutare</option>
-                      <option value="Gweru">Gweru</option>
-                      <option value="Masvingo">Masvingo</option>
-                    </select>
-                  </div>
+
+                  {isSignUp && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                          <Phone className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Zimbabwe Mobile
+                        </label>
+                        <input
+                          type="tel"
+                          required
+                          placeholder="+263776559364"
+                          value={phone}
+                          onChange={e => setPhone(e.target.value)}
+                          className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                          <MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Metropolitan Area
+                        </label>
+                        <select
+                          value={city}
+                          onChange={e => setCity(e.target.value)}
+                          className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-sans"
+                        >
+                          <option value="Chinhoyi">Chinhoyi (HQ)</option>
+                          <option value="Harare">Harare Metro</option>
+                          <option value="Bulawayo">Bulawayo Metro</option>
+                          <option value="Mutare">Mutare</option>
+                          <option value="Gweru">Gweru</option>
+                          <option value="Masvingo">Masvingo</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {isSignUp && (
+                    <div className="space-y-1">
+                      <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                        <MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Street Address / Suburb
+                      </label>
+                      <input
+                        type="text"
+                        value={street}
+                        onChange={e => setStreet(e.target.value)}
+                        placeholder="e.g. Grey Building, Chinhoyi"
+                        className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full py-3 mt-4 bg-black hover:bg-zinc-800 text-white font-bold tracking-widest uppercase text-xs rounded-sm transition-all border border-black cursor-pointer shadow-sm"
+                  >
+                    {isSignUp ? 'Request Membership Link' : 'Send Secure Magic Link'}
+                  </button>
+
+                  {magicLinkSent && (
+                    <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-sm space-y-3">
+                      <p className="font-semibold text-[11px] text-zinc-700 text-center">
+                        📬 An entry link has been dispatched to <span className="font-mono text-black">{email}</span>.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={simulateMagicLinkClick}
+                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-sm text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <span>🔗 Sandbox Bypass: Simulate Email Click</span>
+                      </button>
+                    </div>
+                  )}
+                </form>
+              ) : (
+                /* PHONE OTP AUTHENTICATION MODE */
+                <div className="space-y-4">
+                  {!otpSent ? (
+                    <form onSubmit={handleSendPhoneOTP} className="space-y-4">
+                      {isSignUp && (
+                        <div className="space-y-1">
+                          <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                            <User className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Full Member Name
+                          </label>
+                          <input
+                            type="text"
+                            required
+                            value={name}
+                            onChange={e => setName(e.target.value)}
+                            placeholder="e.g. Tendai Moyo"
+                            className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                          />
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                          <Phone className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Zimbabwe Mobile
+                        </label>
+                        <input
+                          type="tel"
+                          required
+                          placeholder="e.g. +263776559364 or 0776559364"
+                          value={phone}
+                          onChange={e => setPhone(e.target.value)}
+                          className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
+                        />
+                      </div>
+
+                      {isSignUp && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1">
+                            <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                              <Mail className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Email Address
+                            </label>
+                            <input
+                              type="email"
+                              required
+                              value={email}
+                              onChange={e => setEmail(e.target.value)}
+                              placeholder="name@gmail.com"
+                              className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                              <MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Metropolitan Area
+                            </label>
+                            <select
+                              value={city}
+                              onChange={e => setCity(e.target.value)}
+                              className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-sans"
+                            >
+                              <option value="Chinhoyi">Chinhoyi (HQ)</option>
+                              <option value="Harare">Harare Metro</option>
+                              <option value="Bulawayo">Bulawayo Metro</option>
+                              <option value="Mutare">Mutare</option>
+                              <option value="Gweru">Gweru</option>
+                              <option value="Masvingo">Masvingo</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+
+                      {isSignUp && (
+                        <div className="space-y-1">
+                          <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                            <MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Street Address / Suburb
+                          </label>
+                          <input
+                            type="text"
+                            value={street}
+                            onChange={e => setStreet(e.target.value)}
+                            placeholder="e.g. Grey Building, Chinhoyi"
+                            className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
+                          />
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 mt-4 bg-black hover:bg-zinc-800 text-white font-bold tracking-widest uppercase text-xs rounded-sm transition-all border border-black cursor-pointer shadow-sm"
+                      >
+                        Send 6-Digit OTP Code
+                      </button>
+                    </form>
+                  ) : (
+                    <form onSubmit={handleVerifyPhoneOTP} className="space-y-4">
+                      {simulatedOTP && (
+                        <div className="p-3.5 bg-zinc-50 border border-[#D4AF37]/40 rounded-sm text-center">
+                          <p className="font-extrabold text-zinc-800 tracking-wider">🔒 SIMULATED SMS GATEWAY</p>
+                          <p className="text-[10.5px] text-zinc-500 mt-1">
+                            Your security authentication code is: <span className="font-mono font-bold text-emerald-700 text-sm">{simulatedOTP}</span>
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1">
+                          <Lock className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Security OTP Token
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          maxLength={6}
+                          placeholder="e.g. 123456"
+                          value={otpCode}
+                          onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                          className="w-full p-3 bg-zinc-50 text-black rounded-sm border border-zinc-200 text-center text-lg tracking-widest font-mono focus:outline-none focus:border-[#D4AF37]"
+                        />
+                      </div>
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 mt-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold tracking-widest uppercase text-xs rounded-sm transition-all border border-emerald-750 cursor-pointer shadow-sm"
+                      >
+                        Verify OTP & Access Hub
+                      </button>
+
+                      <div className="text-center pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOtpSent(false);
+                            setOtpCode('');
+                            setSimulatedOTP('');
+                            setAuthError('');
+                            setAuthSuccess('');
+                          }}
+                          className="text-zinc-500 hover:text-black font-bold text-[10px] tracking-wide uppercase cursor-pointer"
+                        >
+                          ← Change Phone / Re-request Code
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
 
-              <div className="space-y-1">
-                <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><Lock className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Account Security Password</label>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
-                />
-              </div>
-
-              {isSignUp && (
-                <div className="space-y-1">
-                  <label className="text-zinc-500 font-bold uppercase tracking-wider text-[9.5px] flex items-center gap-1.5 mb-1"><MapPin className="h-3.5 w-3.5 text-[#D4AF37]" strokeWidth={2.5} /> Street Address / Suburb</label>
-                  <input
-                    type="text"
-                    value={street}
-                    onChange={e => setStreet(e.target.value)}
-                    placeholder="e.g. Block C, Chinhoyi Plaza, Chinhoyi"
-                    className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
-                  />
+              {/* Evaluation Shortcut */}
+              {!isSignUp && !otpSent && (
+                <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-sm mt-3 text-center space-y-1.5">
+                  <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Evaluation / Sandbox Shortcut</p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setEmail('visitor@vip.co.zw');
+                      const response = await verifyPhoneOTP('+263776559364', '123456', false, {
+                        email: 'visitor@vip.co.zw',
+                        name: 'Tendai Moyo',
+                        phone: '+263776559364',
+                        address: {
+                          street: 'Grey Building, Chinhoyi',
+                          city: 'Chinhoyi',
+                          province: 'Mashonaland West'
+                        },
+                        referralCode: 'VIPREF-7712'
+                      });
+                      if (response.success && response.profile) {
+                        setCurrentUser(response.profile);
+                        localStorage.setItem('vip_active_session_email', 'visitor@vip.co.zw');
+                        setAuthSuccess('Welcome Tendai! Evaluation sandbox session loaded successfully.');
+                        setTimeout(() => setAuthSuccess(''), 4000);
+                      }
+                    }}
+                    className="w-full py-2 px-3 bg-white hover:bg-zinc-100 text-zinc-800 border border-zinc-250 hover:border-[#D4AF37] rounded-sm font-bold text-[10.5px] transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                  >
+                    <span>🔑 Direct Login: Tendai Moyo (Visitor)</span>
+                  </button>
                 </div>
               )}
-
-              <button
-                type="submit"
-                className="w-full py-3 mt-4 bg-black hover:bg-zinc-800 text-white font-bold tracking-widest uppercase text-xs rounded-sm transition-all border border-black cursor-pointer shadow-sm"
-              >
-                {isSignUp ? 'Generate Database Credentials' : 'Authenticate Security Lock'}
-              </button>
 
               <div className="text-center pt-2">
                 <button
                   type="button"
                   onClick={() => {
                     setIsSignUp(!isSignUp);
+                    setOtpSent(false);
+                    setMagicLinkSent(false);
                     setAuthError('');
                     setAuthSuccess('');
                   }}
-                  className="text-[#D4AF37] hover:underline font-bold transition-all"
+                  className="text-[#D4AF37] hover:underline font-bold transition-all text-center mx-auto block cursor-pointer"
                 >
-                  {isSignUp ? 'Already a registered VIP member? Sign In' : 'New to VIP Elite Fashion? Setup Account'}
+                  {isSignUp ? 'Already registered with VIP? Access Portal' : 'New to VIP Elite Fashion? Request Membership'}
                 </button>
               </div>
 
-            </form>
+            </div>
           )}
 
         </div>

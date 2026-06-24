@@ -9,12 +9,11 @@ import BottomNav from './components/BottomNav';
 import HeroSection from './components/HeroSection';
 import ProductCard from './components/ProductCard';
 import ProductDetailModal from './components/ProductDetailModal';
-import AdminPanel from './components/AdminPanel';
 import AuthModal from './components/AuthModal';
 import DocPortal from './components/DocPortal';
 import WhatsAppChat from './components/WhatsAppChat';
 import VIPLogo from './components/VIPLogo';
-import { initializeSupabase, syncOrderToSupabase, syncWishlist, fetchUserOrders, getSessionUserProfile } from './lib/supabase';
+import { initializeSupabase, syncOrderToSupabase, syncWishlist, fetchUserOrders, getSessionUserProfile, getSupabase, signInMember } from './lib/supabase';
 import { INITIAL_PRODUCTS, ZIMBABWE_CITIES, AVAILABLE_COUPONS } from './data';
 import { Product, CartItem, Order, UserProfile, Review, Coupon } from './types';
 import { 
@@ -37,21 +36,8 @@ export default function App() {
     { id: 'r3', productId: 'p9', name: 'Nomalanga G.', rating: 5, comment: 'Absolutely magnificent watch. Requires zero battery swaps, and the gold bezels attract continuous high-end compliments.', date: 'June 1, 2026' }
   ]);
 
-  // Base state profiles (mock logged-in user)
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>({
-    email: 'visitor@vip.co.zw',
-    name: 'Tendai Moyo',
-    phone: '+263777123456',
-    address: {
-      street: 'Block 2, Chinhoyi Plaza, Chinhoyi',
-      city: 'Chinhoyi',
-      province: 'Mashonaland West'
-    },
-    wishlist: [],
-    couponsUsed: [],
-    referralCode: 'VIPREF-7712',
-    loyaltyPoints: 340
-  });
+  // Base state profiles (mock logged-in user starts as null for secure gating)
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
   // Seed dynamic initial order log so evaluators see a rich logs overview instantly
   const [orders, setOrders] = useState<Order[]>([
@@ -75,13 +61,13 @@ export default function App() {
       shippingCost: 2.00,
       total: 51.99,
       paymentMethod: 'EcoCash',
-      paymentPhone: '+263777123456',
+      paymentPhone: '+263776559364',
       status: 'Shipped',
       shippingAddress: {
-        street: 'Block 2, Chinhoyi Plaza, Chinhoyi',
+        street: 'Grey Building, Chinhoyi',
         city: 'Chinhoyi',
         province: 'Mashonaland West',
-        phone: '+263777123456'
+        phone: '+263776559364'
       },
       trackingNumber: 'TRACK-882910'
     }
@@ -95,7 +81,6 @@ export default function App() {
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [docsPortalOpen, setDocsPortalOpen] = useState(false);
-  const [isAdminView, setIsAdminView] = useState(false);
 
   // Checkout shipping states & inputs
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'shipping' | 'payment'>('cart');
@@ -157,8 +142,10 @@ export default function App() {
     }
   }, [currentUser]);
 
-  // Load Supabase Client dynamic credentials once on mount
+  // Load Supabase Client dynamic credentials once on mount with session persistence and auth wrappers
   useEffect(() => {
+    let authSubscription: { unsubscribe: () => void } | null = null;
+
     const fetchConfigAndInit = async () => {
       try {
         const res = await fetch('/api/supabase-config');
@@ -166,17 +153,51 @@ export default function App() {
           const data = await res.json();
           const initialized = initializeSupabase(data.supabaseUrl, data.supabaseAnonKey);
           if (initialized) {
+            const supabase = getSupabase();
+            if (supabase) {
+              const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+                if (session?.user) {
+                  const profile = await getSessionUserProfile();
+                  setCurrentUser(profile);
+                } else {
+                  setCurrentUser(null);
+                }
+              });
+              authSubscription = subscription;
+            }
+
             const profile = await getSessionUserProfile();
             if (profile) {
               setCurrentUser(profile);
+              return;
             }
           }
         }
       } catch (err) {
         console.error('Failed to configure real-time Supabase integrations: ', err);
       }
+
+      // Offline / Sandbox Mode session persistence fallback
+      const savedEmail = localStorage.getItem('vip_active_session_email');
+      if (savedEmail) {
+        try {
+          const resMock = await signInMember(savedEmail, 'sandbox_mode');
+          if (resMock.success && resMock.profile) {
+            setCurrentUser(resMock.profile);
+          }
+        } catch (mockErr) {
+          console.warn('Failed to recover offline simulated session:', mockErr);
+        }
+      }
     };
+
     fetchConfigAndInit();
+
+    return () => {
+      if (authSubscription) {
+        authSubscription.unsubscribe();
+      }
+    };
   }, []);
 
   // Category navigation beads
@@ -450,8 +471,6 @@ export default function App() {
           setCheckoutStep('cart');
         }}
         onOpenAuth={() => setAuthModalOpen(true)}
-        onToggleAdmin={() => setIsAdminView(!isAdminView)}
-        isAdminView={isAdminView}
         onOpenDocs={() => setDocsPortalOpen(true)}
         allProducts={products}
         onSearchSelectProduct={(p) => setSelectedProduct(p)}
@@ -469,27 +488,12 @@ export default function App() {
           setCheckoutStep('cart');
         }}
         onOpenAuth={() => setAuthModalOpen(true)}
-        onToggleAdmin={() => setIsAdminView(!isAdminView)}
-        isAdminView={isAdminView}
         onOpenDocs={() => setDocsPortalOpen(true)}
         currentUserEmail={currentUser ? currentUser.email : null}
       />
 
-      {/* ADMIN CONTROL PANEL DASHBOARD SPLIT */}
-      {isAdminView ? (
-        <div id="dashboard-admin-viewholder" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-          <AdminPanel
-            products={products}
-            setProducts={setProducts}
-            orders={orders}
-            setOrders={setOrders}
-            users={currentUser ? [currentUser] : []}
-            setUsers={() => {}}
-          />
-        </div>
-      ) : (
-        /* CUSTOMER PUBLIC SHOWROOM */
-        <div id="customer-viewholder">
+      {/* CUSTOMER PUBLIC SHOWROOM */}
+      <div id="customer-viewholder">
           
           {/* Slider Promo Banners */}
           <HeroSection />
@@ -582,12 +586,11 @@ export default function App() {
           {/* Elegant Page Footer details */}
           <footer className="bg-neutral-950 border-t border-neutral-900 py-12 mt-16 text-xs text-neutral-500 text-center font-sans space-y-3">
             <VIPLogo size="sm" className="opacity-75" />
-            <p className="max-w-md mx-auto px-4">VIP Chinhoyi Corporate Depot, Shop 4A Chinhoyi Plaza, Central Zimbabwe. Syncing Supabase, dynamic automated order tracking and local mobile wallets.</p>
+            <p className="max-w-md mx-auto px-4">VIP Chinhoyi Corporate Depot, Grey Building, Chinhoyi, Central Zimbabwe. Syncing Supabase, dynamic automated order tracking and local mobile wallets.</p>
             <p className="font-mono text-[10.5px]">© 2026 VIP fashion markets LLC.</p>
           </footer>
 
         </div>
-      )}
 
       {/* MODAL 1: FASHION ITEM VARIANT VIEW SELECTOR */}
       <ProductDetailModal
@@ -817,7 +820,7 @@ export default function App() {
                         required
                         value={checkoutStreet}
                         onChange={e => setCheckoutStreet(e.target.value)}
-                        placeholder="e.g. Block C, Chinhoyi Plaza, Chinhoyi"
+                        placeholder="e.g. Grey Building, Chinhoyi"
                         className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37]"
                       />
                     </div>
@@ -829,7 +832,7 @@ export default function App() {
                         required
                         value={checkoutPhone}
                         onChange={e => setCheckoutPhone(e.target.value)}
-                        placeholder="e.g. +263777123456"
+                        placeholder="e.g. +263776559364"
                         className="w-full p-2.5 bg-zinc-50 text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
                       />
                     </div>
@@ -876,7 +879,7 @@ export default function App() {
                           required
                           value={checkoutWalletPhone}
                           onChange={e => setCheckoutWalletPhone(e.target.value)}
-                          placeholder="e.g. +263777123456"
+                          placeholder="e.g. +263776559364"
                           className="w-full p-2.5 bg-white text-black rounded-sm border border-zinc-200 focus:outline-none focus:border-[#D4AF37] font-mono"
                         />
                       </div>
@@ -888,7 +891,7 @@ export default function App() {
                     <div className="p-4 bg-zinc-50 border border-zinc-200 rounded-sm space-y-1.5">
                       <p className="font-bold text-zinc-800">Escrow Cash On Delivery</p>
                       <p className="text-zinc-500 leading-relaxed text-[10.5px]">
-                        Pay direct cash on delivery at the Chinhoyi Plaza Chinhoyi depot, or pay your corresponding city Swift transport courier on cargo handover. Available USD flat bills only.
+                        Pay direct cash on delivery at the Grey Building, Chinhoyi depot, or pay your corresponding city Swift transport courier on cargo handover. Available USD flat bills only.
                       </p>
                     </div>
                   )}

@@ -13,8 +13,6 @@ interface NavbarProps {
   wishlistCount: number;
   onOpenCart: () => void;
   onOpenAuth: () => void;
-  onToggleAdmin: () => void;
-  isAdminView: boolean;
   onOpenDocs: () => void;
   allProducts: Product[];
   onSearchSelectProduct: (p: Product) => void;
@@ -28,8 +26,6 @@ export default function Navbar({
   wishlistCount,
   onOpenCart,
   onOpenAuth,
-  onToggleAdmin,
-  isAdminView,
   onOpenDocs,
   allProducts,
   onSearchSelectProduct,
@@ -155,18 +151,6 @@ export default function Navbar({
             >
               <BookOpen className="h-4 w-4" />
               <span>Portal</span>
-            </button>
-
-            {/* Admin toggle */}
-            <button
-              onClick={onToggleAdmin}
-              className={`flex items-center gap-1.5 py-1 transition-colors cursor-pointer ${
-                isAdminView ? 'text-black font-extrabold' : 'text-zinc-500 hover:text-black'
-              }`}
-              title="Admin Mode"
-            >
-              {isAdminView ? <Sparkles className="h-4 w-4 text-[#D4AF37] animate-spin" /> : <Settings className="h-4 w-4" />}
-              <span>{isAdminView ? 'Store' : 'Admin'}</span>
             </button>
 
             {/* Favorites / Wishlist */}

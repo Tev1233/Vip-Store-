@@ -275,6 +275,6 @@ export const AVAILABLE_COUPONS: Coupon[] = [
 ];
 
 export const WHATSAPP_CONFIG = {
-  phoneNumber: '+263777123456', // Simulated business number
+  phoneNumber: '+263776559364', // Official business number
   defaultText: 'Hello VIP Store Zimbabwe! I would like to place an order or ask support about products...'
 };

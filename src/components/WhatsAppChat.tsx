@@ -25,7 +25,7 @@ export default function WhatsAppChat({ compact = false }: WhatsAppChatProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [msgInput, setMsgInput] = useState('');
 
-  const BUSINESS_PHONE = '+263777123456'; // Simulated VIP Store Official support
+  const BUSINESS_PHONE = '263776559364'; // Official support WhatsApp link number
 
   const handleSendWhatsAppMessage = (textOverride?: string) => {
     const finalMsg = textOverride || msgInput;

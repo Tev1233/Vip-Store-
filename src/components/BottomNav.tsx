@@ -14,8 +14,6 @@ interface BottomNavProps {
   wishlistCount: number;
   onOpenCart: () => void;
   onOpenAuth: () => void;
-  onToggleAdmin: () => void;
-  isAdminView: boolean;
   onOpenDocs: () => void;
   currentUserEmail: string | null;
 }
@@ -25,8 +23,6 @@ export default function BottomNav({
   wishlistCount,
   onOpenCart,
   onOpenAuth,
-  onToggleAdmin,
-  isAdminView,
   onOpenDocs,
   currentUserEmail
 }: BottomNavProps) {
@@ -48,26 +44,6 @@ export default function BottomNav({
         >
           <BookOpen className="h-5 w-5" />
           <span className="text-[9px] font-bold uppercase tracking-wider mt-1 scale-95 origin-top truncate max-w-[64px]">Portal</span>
-        </button>
-
-        {/* Quick Toggle to Admin Dashboard */}
-        <button
-          onClick={onToggleAdmin}
-          className={`flex flex-col items-center justify-center flex-1 py-1.5 transition-colors ${
-            isAdminView ? 'text-black font-extrabold' : 'text-zinc-500 hover:text-black'
-          }`}
-          title="Admin Control Mode"
-        >
-          <div className="relative">
-            {isAdminView ? (
-              <Sparkles className="h-5 w-5 text-[#D4AF37] animate-spin" />
-            ) : (
-              <Settings className="h-5 w-5" />
-            )}
-          </div>
-          <span className="text-[9px] font-bold uppercase tracking-wider mt-1 scale-95 origin-top truncate max-w-[64px]">
-            {isAdminView ? 'Store' : 'Admin'}
-          </span>
         </button>
 
         {/* Favorites Wishlist */}
